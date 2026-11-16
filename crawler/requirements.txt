@@ -1,0 +1,2 @@
+# 只有執行 crawler/shopee_crawler.py 收集資料時才需要；Streamlit App 本身不需要
+playwright>=1.45

@@ -18,6 +18,7 @@
 app.py        Streamlit 介面
 catalog.py    品牌、類別設定與共用解析（只用標準庫）
 collect.py    建立價格資料庫的工具（只用標準庫）
+crawler/      爬蟲程式（蝦皮 Playwright 版、瀏覽器主控台版），說明見 crawler/README.md
 data/         資料庫快照（official_snapshot.csv、shopee_snapshot.csv）
 raw/shopee/   放從瀏覽器存下的蝦皮 JSON（不會上傳到 GitHub）
 ```
