@@ -4,17 +4,16 @@
 用途：比較 UNIQLO、GU 在「日本官網」與「台灣蝦皮」的價格（長袖、短袖、外套、襯衫、長褲、短褲、配件），
       把日幣標價換算成實際台幣成本（含刷卡手續費、退稅），給出「日本買 or 蝦皮買」的建議。
 
-資料來源（皆有防護與備援，任何失敗都不會中斷畫面）：
+資料來源（皆有防護，任何連線失敗都不會中斷畫面；只使用真實資料）：
   1. 台灣銀行即時牌告匯率 CSV（日圓現金賣出）
   2. 日本官網價格：即時查詢官網公開商品介面，或讀取資料庫快照 data/official_snapshot.csv
-  3. 蝦皮價格：資料庫快照 data/shopee_snapshot.csv、即時 API、匯入 JSON、離線模擬資料
+  3. 蝦皮價格：資料庫快照 data/shopee_snapshot.csv、即時 API、匯入 JSON（只用真實資料，不產生模擬資料）
 
 資料庫由 collect.py 建立，詳見 README.md。
 """
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import random
@@ -56,7 +55,6 @@ DEFAULT_MANUAL_JPY = 2990.0   # 完全沒有官網資料時的預設值（請手
 MODE_DB = "📦 資料庫快照（推薦）"
 MODE_LIVE = "🌐 即時查詢（失敗改用資料庫）"
 MODE_IMPORT = "📂 匯入蝦皮 JSON"
-MODE_OFFLINE = "🛟 蝦皮離線模擬資料"
 
 # 守門員：每個外部網站各自節流、限量、被擋就冷卻
 GUARD_RULES = {
@@ -299,7 +297,7 @@ def effective_jpy(item: dict, use_sale: bool) -> float:
 
 
 # ============================================================================
-# 5. 蝦皮（即時 API / 備援模擬）
+# 5. 蝦皮（資料庫 / 即時 API / 匯入 JSON）
 # ============================================================================
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -351,30 +349,8 @@ def fetch_shopee_live(keyword: str, limit: int = 50, cookie: str = "") -> dict:
     return out
 
 
-def generate_mock_items(brand: str, label: str, tw_item: str, reference_twd: float, n: int = 40) -> list[dict]:
-    """蝦皮離線模擬資料：品牌＋類別當亂數種子（每次相同，錄影穩定），價格為日本成本的 1.05~1.6 倍。"""
-    rng = np.random.default_rng(int(hashlib.md5(f"{brand}|{label}".encode()).hexdigest()[:8], 16))
-    center = (reference_twd if reference_twd > 0 else 600.0) * rng.uniform(1.05, 1.6)
-    shops = ["日本代購小舖", "東京直送", "日系選物", "大阪連線", "正品代購", "日貨專賣"]
-    tags = ["現貨", "日本連線", "正品", "預購", "男女款", "多色可選"]
-    cities = ["台北市", "新北市", "桃園市", "台中市", "台南市", "高雄市"]
-    rows = []
-    for i in range(n):
-        is_tw = rng.random() < 0.6
-        rows.append({
-            "商品名稱": f"【{rng.choice(shops)}】{brand} {tw_item} {rng.choice(tags)} #{i + 1:02d}",
-            "價格": max(round(center * rng.lognormal(0, 0.15) * (1.0 if is_tw else 0.9)), 1),
-            "累積銷量": int(rng.pareto(1.3) * 50),
-            "評分": round(float(rng.uniform(4.3, 5.0)), 1),
-            "賣家地區": str(rng.choice(cities)) if is_tw else str(rng.choice(["日本", "日本", "中國大陸"])),
-            "出貨地": SHIP_TW if is_tw else SHIP_OVERSEAS,
-            "商品連結": f"https://shopee.tw/search?keyword={quote(brand + ' ' + tw_item)}",
-        })
-    return rows
-
-
 def get_shopee(cfg: dict) -> tuple[pd.DataFrame | None, str, str]:
-    """依模式取得蝦皮資料，回傳 (DataFrame 或 None, 來源說明, 失敗原因)。None 代表改用模擬資料。"""
+    """依模式取得蝦皮資料，回傳 (DataFrame 或 None, 來源說明, 失敗原因)。None 代表沒有可用的蝦皮資料。"""
     _, latest, collected = snapshot_rows(SHOPEE_CSV, cfg["brand"], cfg["category"])
     if cfg["terms"] and not latest.empty:  # 中文關鍵字：標題需符合每個詞（含同義詞）
         latest = latest[latest["商品名稱"].apply(lambda t: match_all_terms(t, cfg["terms"], "tw"))]
@@ -384,7 +360,7 @@ def get_shopee(cfg: dict) -> tuple[pd.DataFrame | None, str, str]:
     if cfg["mode"] == MODE_DB:
         if not snap.empty:
             return snap, f"資料庫（{collected}）", ""
-        # 資料庫沒有這項商品：改用即時查詢（受守門員保護），仍失敗才用模擬資料
+        # 資料庫沒有這項商品：改用即時查詢（受守門員保護），仍失敗就顯示沒有資料
         with st.spinner(f"資料庫沒有{cfg['scope']}，改搜尋蝦皮即時資料…"):
             live = fetch_shopee_live(cfg["shopee_kw"], cfg["limit"], cfg["cookie"])
         if live["ok"]:
@@ -406,7 +382,7 @@ def get_shopee(cfg: dict) -> tuple[pd.DataFrame | None, str, str]:
             return (pd.DataFrame(items), "匯入檔案", "") if items else (None, "", "JSON 中找不到商品資料")
         except Exception:  # noqa: BLE001
             return None, "", "JSON 檔格式無法解析"
-    return None, "", "使用者選擇離線模擬資料"
+    return None, "", "未知的資料來源模式"
 
 
 # ============================================================================
@@ -465,7 +441,7 @@ def render_sidebar(bot: dict) -> dict:
         query, terms = "", []
         category = sb.radio("類別", list(CATEGORIES), horizontal=True)
     scope = category or f"「{query}」"
-    mode = sb.radio("資料來源", [MODE_DB, MODE_LIVE, MODE_IMPORT, MODE_OFFLINE],
+    mode = sb.radio("資料來源", [MODE_DB, MODE_LIVE, MODE_IMPORT],
                     help="錄影展示建議用「資料庫快照」：真實資料、畫面穩定、不會被擋。")
 
     # --- 日本官網價格 ---
@@ -601,10 +577,9 @@ def main() -> None:
     if df is not None:
         st.success(f"蝦皮資料：{len(df)} 筆（來源：{shopee_source}）", icon="🛒")
     else:
-        df = pd.DataFrame(generate_mock_items(cfg["brand"], cfg["scope"], cfg["query"] or CATEGORIES[cfg["category"]]["tw"], overseas_twd))
-        shopee_source = "離線模擬"
-        st.info(f"已切換至離線備援資料模式（原因：{shopee_reason}）。以下為模擬資料，分析流程與真實資料相同。",
-                icon="🛟")
+        st.warning(f"目前沒有可比較的蝦皮資料（{shopee_reason}）。"
+                   "請換個類別或關鍵字，或改用「資料庫快照」模式。", icon="🛒")
+        st.stop()
 
     # ---------- 清洗 ----------
     df["價格"] = pd.to_numeric(df["價格"], errors="coerce")
