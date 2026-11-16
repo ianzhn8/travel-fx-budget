@@ -139,18 +139,30 @@ def parse_shopee_payload(payload: dict) -> list[dict]:
     raw_items = payload.get("items") or (payload.get("data") or {}).get("items") or []
     rows = []
     for raw in raw_items:
-        basic = raw.get("item_basic") or raw
-        price_raw = basic.get("price") or basic.get("price_min")
-        price = (price_raw or 0) / 100000
-        if price <= 0:
+        if raw.get("adsid"):  # 跳過廣告商品
             continue
-        shopid, itemid = basic.get("shopid"), basic.get("itemid")
-        location = basic.get("shop_location") or "未知"
+        # 舊版格式：item_basic；2026 新版格式：item_card_displayed_asset + item_data
+        basic = raw.get("item_basic") or {}
+        asset = raw.get("item_card_displayed_asset") or {}
+        data = raw.get("item_data") or {}
+        name = asset.get("name") or basic.get("name") or ""
+        price_raw = ((data.get("item_card_display_price") or {}).get("price")
+                     or (asset.get("display_price") or {}).get("price")
+                     or basic.get("price") or basic.get("price_min"))
+        price = (price_raw or 0) / 100000
+        if price <= 0 or not name:
+            continue
+        sold = ((data.get("item_card_display_sold_count") or {}).get("historical_sold_count")
+                or basic.get("historical_sold") or basic.get("sold") or 0)
+        rating = (data.get("item_rating") or basic.get("item_rating") or {}).get("rating_star") or 0
+        shopid = raw.get("shopid") or data.get("shopid") or basic.get("shopid")
+        itemid = raw.get("itemid") or data.get("itemid") or basic.get("itemid")
+        location = asset.get("shop_location") or basic.get("shop_location") or "未知"
         rows.append({
-            "商品名稱": basic.get("name", "（未命名商品）"),
+            "商品名稱": name,
             "價格": round(price),
-            "累積銷量": int(basic.get("historical_sold") or basic.get("sold") or 0),
-            "評分": round(float((basic.get("item_rating") or {}).get("rating_star") or 0), 1),
+            "累積銷量": int(sold),
+            "評分": round(float(rating), 1),
             "賣家地區": location,
             "出貨地": classify_shipping(location),
             "商品連結": f"https://shopee.tw/product/{shopid}/{itemid}" if shopid and itemid else "",
