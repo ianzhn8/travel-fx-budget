@@ -402,22 +402,6 @@ def remove_outliers_iqr(df: pd.DataFrame, col: str = "價格") -> pd.DataFrame:
     return df[df[col].between(q1 - 1.5 * iqr, q3 + 1.5 * iqr)]
 
 
-def decision_advice(spread: float, ratio: float, qty: int) -> tuple[str, str, str]:
-    """ratio = (蝦皮中位數 − 日本成本) / 蝦皮中位數"""
-    total = spread * qty
-    if ratio > 0.20:
-        return "success", f"🔥 日本必買！每件現省 NT${spread:,.0f}", \
-            f"比蝦皮中位數便宜 {ratio:.0%}，買 {qty} 件共省 NT${total:,.0f}，值得塞進行李箱。"
-    if ratio >= 0.10:
-        return "info", f"👍 可以順手買，每件省 NT${spread:,.0f}", \
-            f"便宜 {ratio:.0%}，行李還有空間就帶；買 {qty} 件共省 NT${total:,.0f}。"
-    if ratio >= 0:
-        return "warning", "📦 直接蝦皮買，省行李空間", \
-            f"價差僅 {ratio:.0%}（每件 NT${spread:,.0f}），衣服佔空間，不值得扛回台灣。"
-    return "error", "🚫 日本反而比較貴", \
-        f"日本成本比蝦皮中位數高 NT${-spread:,.0f}（{-ratio:.0%}），建議回台灣在蝦皮購買。"
-
-
 # ============================================================================
 # 7. 介面
 # ============================================================================
@@ -482,7 +466,6 @@ def render_sidebar(bot: dict) -> dict:
 
     jpy_price = sb.number_input("日本含稅價（JPY，可手動調整）", min_value=0.0, value=float(round(auto_jpy)),
                                 step=10.0, key=f"jpy_{brand}_{scope}_{use_sale}_{round(auto_jpy)}")
-    qty = sb.number_input("預計購買件數", min_value=1, value=1, step=1)
 
     # --- 匯率與費用 ---
     sb.divider()
@@ -525,7 +508,7 @@ def render_sidebar(bot: dict) -> dict:
             st.rerun()
 
     return dict(brand=brand, category=category, query=query, terms=terms, scope=scope, mode=mode, official=official, picked=picked, same_item=same_item,
-                use_sale=use_sale, jpy_price=jpy_price, qty=int(qty), rate=rate, fee_pct=fee_pct,
+                use_sale=use_sale, jpy_price=jpy_price, rate=rate, fee_pct=fee_pct,
                 refund_pct=refund_pct, uploaded=uploaded, shopee_kw=shopee_kw.strip(), limit=limit,
                 brand_only=brand_only, exclude_used=exclude_used, exclude_outliers=exclude_outliers, cookie=cookie.strip())
 
@@ -615,8 +598,6 @@ def main() -> None:
     # ---------- 統計與 KPI ----------
     p_min, p_med, p_max = df["價格"].min(), df["價格"].median(), df["價格"].max()
     spread = p_med - overseas_twd
-    ratio = spread / p_med if p_med else 0
-    percentile = (df["價格"] < overseas_twd).mean()
 
     st.subheader("📊 關鍵指標")
     k1, k2, k3, k4, k5 = st.columns(5)
@@ -626,22 +607,6 @@ def main() -> None:
     k3.metric("蝦皮市場最低價", f"NT${p_min:,.0f}")
     k4.metric("市場中位數價", f"NT${p_med:,.0f}")
     k5.metric("最大價差", f"NT${p_max - overseas_twd:,.0f}", help="蝦皮最高價 − 日本成本")
-
-    st.subheader("🧠 智慧購買決策建議")
-    level, title, detail = decision_advice(spread, ratio, cfg["qty"])
-    getattr(st, level)(f"### {title}\n{detail}")
-    st.caption(f"日本成本落在蝦皮價格第 **{percentile:.0%}** 百分位（有 {percentile:.0%} 的蝦皮賣家比日本便宜）。")
-
-    with st.expander("🗂️ 4W1H 分析摘要"):
-        n_tw = int((df["出貨地"] == SHIP_TW).sum())
-        st.markdown(
-            f"- **What｜買什麼**：{cfg['brand']} {cfg['scope']}｜{compare_name}（{cfg['qty']} 件）\n"
-            f"- **Where｜在哪買**：日本 NT${overseas_twd:,.0f}（¥{cfg['jpy_price']:,.0f}） vs 蝦皮中位數 NT${p_med:,.0f}\n"
-            f"- **When｜資料時間**：匯率 {bot.get('updated_at') or '參考值'}；日本 {cfg['official']['source']}；"
-            f"蝦皮 {shopee_source}\n"
-            f"- **Who｜誰在賣**：台灣現貨 {n_tw} 家、海外出貨 {len(df) - n_tw} 家\n"
-            f"- **How｜怎麼買最划算**：{title}"
-        )
 
     # ---------- 日本官網每件商品 vs 蝦皮中位數 ----------
     if cfg["official"]["ok"]:
