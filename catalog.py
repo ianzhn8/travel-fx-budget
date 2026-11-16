@@ -53,6 +53,10 @@ TW_LOCATIONS = [
     "台北", "新北", "桃園", "台中", "台南", "高雄", "基隆", "新竹", "苗栗", "彰化",
     "南投", "雲林", "嘉義", "屏東", "宜蘭", "花蓮", "台東", "澎湖", "金門", "連江", "馬祖",
 ]
+# 二手 / 轉賣商品的標題關鍵字（價格不代表新品市場價，比價時預設排除）
+USED_PATTERN = (r"二手|中古|古著|近全新|近新|[0-9９]成新|[一二三四五六七八九]成新|9\.?[0-9]?成|"
+                r"轉賣|僅試穿|少穿|試穿|有使用痕跡|已下水")
+
 SHIP_TW = "台灣現貨"
 SHIP_OVERSEAS = "海外出貨"
 
@@ -74,6 +78,11 @@ def classify_shipping(location: str) -> str:
     """依賣家所在地判斷出貨類型（『臺』統一轉為『台』再比對）。"""
     loc = str(location or "").replace("臺", "台").strip()
     return SHIP_TW if any(city in loc for city in TW_LOCATIONS) else SHIP_OVERSEAS
+
+
+def is_used_item(title: str) -> bool:
+    """標題看起來是二手或轉賣商品。"""
+    return bool(re.search(USED_PATTERN, str(title or "")))
 
 
 def title_matches_brand(title: str, aliases: list[str]) -> bool:

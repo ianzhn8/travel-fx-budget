@@ -32,7 +32,8 @@ import requests
 import streamlit as st
 
 from catalog import (BRANDS, CATEGORIES, SHIP_OVERSEAS, SHIP_TW, clean_official_rows,
-                     parse_official_items, parse_shopee_payload, title_matches_brand, to_float)
+                     is_used_item, parse_official_items, parse_shopee_payload, title_matches_brand,
+                     to_float)
 
 # ============================================================================
 # 0. 全域常數
@@ -479,6 +480,8 @@ def render_sidebar(bot: dict) -> dict:
                                   key=f"kw_{brand}_{category}")
         limit = st.slider("蝦皮即時搜尋筆數", 20, 60, 50, step=10)
         brand_only = st.checkbox("只保留標題含品牌名的商品", value=True)
+        exclude_used = st.checkbox("排除二手 / 轉賣商品", value=True,
+                                   help="標題含「二手」「九成新」「近全新」「轉賣」等字樣的商品，價格不代表新品行情")
         exclude_outliers = st.checkbox("排除極端價格（IQR 法）", value=True)
         cookie = st.text_input("蝦皮 Cookie（選填，不建議在雲端使用）", type="password")
         if st.button("🔄 清除快取並重新讀取"):
@@ -488,7 +491,7 @@ def render_sidebar(bot: dict) -> dict:
     return dict(brand=brand, category=category, mode=mode, official=official, picked=picked,
                 use_sale=use_sale, jpy_price=jpy_price, qty=int(qty), rate=rate, fee_pct=fee_pct,
                 refund_pct=refund_pct, uploaded=uploaded, shopee_kw=shopee_kw.strip(), limit=limit,
-                brand_only=brand_only, exclude_outliers=exclude_outliers, cookie=cookie.strip())
+                brand_only=brand_only, exclude_used=exclude_used, exclude_outliers=exclude_outliers, cookie=cookie.strip())
 
 
 def render_table(df: pd.DataFrame, overseas_twd: float, tag: str) -> None:
@@ -552,6 +555,11 @@ def main() -> None:
         df = df[df["商品名稱"].apply(lambda t: title_matches_brand(t, BRANDS[cfg["brand"]]["aliases"]))]
         if n0 - len(df):
             notes.append(f"排除 {n0 - len(df)} 筆標題不含品牌名的商品")
+    if cfg["exclude_used"]:
+        n0 = len(df)
+        df = df[~df["商品名稱"].apply(is_used_item)]
+        if n0 - len(df):
+            notes.append(f"排除 {n0 - len(df)} 筆二手 / 轉賣商品")
     if cfg["exclude_outliers"]:
         n0 = len(df)
         df = remove_outliers_iqr(df)
