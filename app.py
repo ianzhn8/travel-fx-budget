@@ -615,7 +615,7 @@ def main() -> None:
     else:
         df = pd.DataFrame(generate_mock_items(cfg["keyword"], overseas_twd, cfg["code"]))
         st.info(
-            f"💡 已切換至離線備援資料模式（原因：{shopee['reason'] or '未知'}）。"
+            f"已切換至離線備援資料模式（原因：{shopee['reason'] or '未知'}）。"
             "以下為模擬資料，分析流程與真實資料完全相同；可於「進階設定」填入 Cookie 後重試。",
             icon="🛟",
         )
