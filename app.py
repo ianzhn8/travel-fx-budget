@@ -566,17 +566,12 @@ def main() -> None:
     overseas_twd = calc_overseas_cost(cfg["jpy_price"], cfg["rate"], cfg["fee_pct"], cfg["refund_pct"])
     compare_name = cfg["picked"]["官網商品名稱"] if cfg["picked"] else f"{cfg['scope']}中位數"
 
-    # ---------- 資料狀態 ----------
-    if cfg["official"]["ok"]:
-        st.success(f"日本價格：{cfg['brand']}｜{compare_name}｜¥{cfg['jpy_price']:,.0f}"
-                   f"（來源：{cfg['official']['source']}）", icon="🇯🇵")
-    else:
+    # ---------- 資料狀態（只在有問題時提示） ----------
+    if not cfg["official"]["ok"]:
         st.warning(f"日本價格使用手動輸入值 ¥{cfg['jpy_price']:,.0f}（{cfg['official']['reason']}）", icon="✍️")
 
     df, shopee_source, shopee_reason = get_shopee(cfg)
-    if df is not None:
-        st.success(f"蝦皮資料：{len(df)} 筆（來源：{shopee_source}）", icon="🛒")
-    else:
+    if df is None:
         st.warning(f"目前沒有可比較的蝦皮資料（{shopee_reason}）。"
                    "請換個類別或關鍵字，或改用「資料庫快照」模式。", icon="🛒")
         st.stop()
