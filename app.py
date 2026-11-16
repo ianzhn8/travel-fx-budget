@@ -513,23 +513,19 @@ def render_sidebar(bot: dict) -> dict:
                 brand_only=brand_only, exclude_used=exclude_used, exclude_outliers=exclude_outliers, cookie=cookie.strip())
 
 
-def render_table(df: pd.DataFrame, overseas_twd: float, tag: str) -> None:
-    st.subheader("📋 蝦皮商品明細")
-    ship_filter = st.multiselect("出貨地篩選", [SHIP_TW, SHIP_OVERSEAS], default=[SHIP_TW, SHIP_OVERSEAS])
-    view = df[df["出貨地"].isin(ship_filter)].copy()
-    view["價差(元)"] = (view["價格"] - overseas_twd).round(0)
-    view["價差(%)"] = ((view["價格"] - overseas_twd) / view["價格"] * 100).round(1)
-    view = view.sort_values("價格").reset_index(drop=True)
-    cols = ["商品名稱", "價格", "價差(元)", "價差(%)", "累積銷量", "評分", "出貨地", "賣家地區", "商品連結"]
-    st.dataframe(view[cols], width="stretch", hide_index=True, height=380, column_config={
-        "價格": st.column_config.NumberColumn("蝦皮售價", format="NT$%d"),
-        "價差(元)": st.column_config.NumberColumn(format="%d", help="蝦皮售價 − 日本成本"),
-        "價差(%)": st.column_config.NumberColumn(format="%.1f%%"),
+def render_table(df: pd.DataFrame, brand: str, tag: str, source: str) -> None:
+    """右欄：蝦皮商品清單（可篩出貨地、下載 CSV）。"""
+    st.subheader("🇹🇼 蝦皮商品")
+    ship_filter = st.multiselect("出貨地", [SHIP_TW, SHIP_OVERSEAS], default=[SHIP_TW, SHIP_OVERSEAS])
+    view = df[df["出貨地"].isin(ship_filter)].sort_values("價格").reset_index(drop=True)
+    cols = ["商品名稱", "價格", "出貨地", "累積銷量", "商品連結"]
+    st.dataframe(view[cols], width="stretch", hide_index=True, height=360, column_config={
+        "價格": st.column_config.NumberColumn("台幣", format="NT$%d"),
         "商品連結": st.column_config.LinkColumn("連結", display_text="開啟"),
     })
-    st.caption(f"共 {len(view)} 筆　｜　價差為正：在日本買比較省")
-    st.download_button("⬇️ 下載 CSV", data=view[cols].to_csv(index=False).encode("utf-8-sig"), mime="text/csv",
-                       file_name=f"price_compare_{tag}_{datetime.now(TW_TZ):%Y%m%d_%H%M}.csv")
+    st.caption(f"共 {len(view)} 筆｜來源：{source}")
+    st.download_button("⬇️ 下載蝦皮清單 CSV", data=view[cols].to_csv(index=False).encode("utf-8-sig"),
+                       mime="text/csv", file_name=f"shopee_{brand}_{tag}_{datetime.now(TW_TZ):%Y%m%d_%H%M}.csv")
 
 
 def main() -> None:
@@ -595,34 +591,48 @@ def main() -> None:
     if notes:
         st.caption("已" + "、".join(notes) + "。")
 
-    # ---------- 統計與 KPI ----------
+    # ---------- ① 比較結果：日本 vs 蝦皮 一張表看懂 ----------
     p_med = df["價格"].median()
+    diff = p_med - overseas_twd  # 正數 = 日本比較便宜
+    st.subheader(f"⚖️ 比較結果｜{cfg['brand']} {cfg['scope']}")
+    st.markdown(
+        f"| | 🇯🇵 日本官網 | 🇹🇼 台灣蝦皮 |\n"
+        f"|---|---|---|\n"
+        f"| 比較的商品 | {compare_name} | 蝦皮上 {len(df)} 筆{'同款' if cfg['same_item'] else '同類'}商品的中位數 |\n"
+        f"| 原始價格 | ¥{cfg['jpy_price']:,.0f}（含稅） | NT${p_med:,.0f} |\n"
+        f"| 換算台幣 | **NT${overseas_twd:,.0f}** | **NT${p_med:,.0f}** |\n"
+    )
+    st.caption(f"日本換算方式：¥{cfg['jpy_price']:,.0f} ×（1 − 退稅 {cfg['refund_pct']}%）× 匯率 {cfg['rate']:.4f}"
+               f" ×（1 + 刷卡手續費 {cfg['fee_pct']}%）＝ NT${overseas_twd:,.0f}")
+    if diff > 0:
+        st.success(f"在日本買每件便宜 **NT${diff:,.0f}**（比蝦皮便宜 {diff / p_med:.0%}）", icon="🇯🇵")
+    elif diff < 0:
+        st.error(f"在日本買每件反而貴 **NT${-diff:,.0f}**（比蝦皮貴 {-diff / p_med:.0%}）", icon="🇹🇼")
+    else:
+        st.info("兩邊價格相同", icon="⚖️")
 
-    st.subheader("📊 關鍵指標")
-    st.metric("台銀匯率（JPY）", f"{cfg['rate']:.4f}")
-
-    # ---------- 日本官網每件商品 vs 蝦皮中位數 ----------
-    if cfg["official"]["ok"]:
-        st.subheader(f"🇯🇵 {cfg['brand']} {cfg['scope']}：日本官網每件商品 vs 蝦皮中位數")
-        rows = []
-        for it in cfg["official"]["items"]:
-            jpy = effective_jpy(it, cfg["use_sale"])
-            twd = calc_overseas_cost(jpy, cfg["rate"], cfg["fee_pct"], cfg["refund_pct"])
-            rows.append({"官網商品名稱": it["官網商品名稱"], "日本價(JPY)": jpy, "日本成本(TWD)": round(twd),
-                         "蝦皮中位數(TWD)": round(p_med), "日本買省(元)": round(p_med - twd),
-                         "日本買省(%)": round((p_med - twd) / p_med * 100, 1), "官網連結": it["官網連結"]})
-        cmp_df = pd.DataFrame(rows).sort_values("日本買省(元)", ascending=False)
-        st.dataframe(cmp_df, width="stretch", hide_index=True, column_config={
-            "日本價(JPY)": st.column_config.NumberColumn(format="¥%d"),
-            "日本成本(TWD)": st.column_config.NumberColumn(format="NT$%d"),
-            "蝦皮中位數(TWD)": st.column_config.NumberColumn(format="NT$%d"),
-            "日本買省(%)": st.column_config.NumberColumn(format="%.1f%%"),
-            "官網連結": st.column_config.LinkColumn("連結", display_text="開啟"),
-        })
-        st.caption(f"日本成本已含匯率、刷卡手續費 {cfg['fee_pct']}%、退稅 {cfg['refund_pct']}%；"
-                   "「日本買省」為負數代表日本比較貴。")
-
-    render_table(df, overseas_twd, f"{cfg['brand']}_{cfg['category'] or cfg['query']}")
+    # ---------- ② 左右兩欄：日本官網清單 | 蝦皮清單 ----------
+    left, right = st.columns(2)
+    with left:
+        st.subheader("🇯🇵 日本官網商品")
+        if cfg["official"]["ok"]:
+            jp_rows = []
+            for it in cfg["official"]["items"]:
+                jpy = effective_jpy(it, cfg["use_sale"])
+                jp_rows.append({"商品名稱": it["官網商品名稱"], "日幣": jpy,
+                                "換算台幣": round(calc_overseas_cost(jpy, cfg["rate"], cfg["fee_pct"], cfg["refund_pct"])),
+                                "連結": it["官網連結"]})
+            st.dataframe(pd.DataFrame(jp_rows).sort_values("換算台幣"), width="stretch", hide_index=True,
+                         height=420, column_config={
+                             "日幣": st.column_config.NumberColumn(format="¥%d"),
+                             "換算台幣": st.column_config.NumberColumn(format="NT$%d"),
+                             "連結": st.column_config.LinkColumn(display_text="開啟"),
+                         })
+            st.caption(f"共 {len(jp_rows)} 件｜來源：{cfg['official']['source']}")
+        else:
+            st.write(f"沒有官網資料，使用手動輸入的 ¥{cfg['jpy_price']:,.0f}。")
+    with right:
+        render_table(df, cfg["brand"], cfg["category"] or cfg["query"], shopee_source)
 
     st.divider()
     st.caption("資料來源：臺灣銀行牌告匯率、UNIQLO／GU 日本官網、蝦皮購物。價格僅供參考，實際以結帳金額為準。")
