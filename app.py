@@ -596,17 +596,14 @@ def main() -> None:
         st.caption("已" + "、".join(notes) + "。")
 
     # ---------- 統計與 KPI ----------
-    p_min, p_med, p_max = df["價格"].min(), df["價格"].median(), df["價格"].max()
+    p_med = df["價格"].median()
     spread = p_med - overseas_twd
 
     st.subheader("📊 關鍵指標")
-    k1, k2, k3, k4, k5 = st.columns(5)
+    k1, k2 = st.columns(2)
     k1.metric("台銀匯率（JPY）", f"{cfg['rate']:.4f}")
-    k2.metric("日本實際台幣成本", f"NT${overseas_twd:,.0f}", delta=f"{-spread:+,.0f} vs 中位數",
+    k2.metric("日本實際台幣成本", f"NT${overseas_twd:,.0f}", delta=f"{-spread:+,.0f} vs 蝦皮中位數",
               delta_color="inverse", help=f"¥{cfg['jpy_price']:,.0f} ×（1−退稅）× 匯率 ×（1+手續費）")
-    k3.metric("蝦皮市場最低價", f"NT${p_min:,.0f}")
-    k4.metric("市場中位數價", f"NT${p_med:,.0f}")
-    k5.metric("最大價差", f"NT${p_max - overseas_twd:,.0f}", help="蝦皮最高價 − 日本成本")
 
     # ---------- 日本官網每件商品 vs 蝦皮中位數 ----------
     if cfg["official"]["ok"]:
