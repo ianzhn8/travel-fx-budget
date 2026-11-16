@@ -13,6 +13,8 @@
 | 步驟 | 程式 | 說明 |
 |---|---|---|
 | 1 | `collect.py official` | 呼叫 UNIQLO、GU 日本官網公開的商品搜尋介面（`/jp/api/commerce/v5/ja/products`），7 個類別、11 個日文關鍵字 |
+| 2 | `crawler/browser_console/shopee_api.js`（建議） | **直接呼叫蝦皮搜尋 API**：在已登入的 shopee.tw 主控台執行，程式主動對 `/api/v4/search/search_items` 發出 14 次請求，下載回傳的 JSON |
+| 2 | `crawler/shopee_api.py` | 同上的 Python 版（只用標準庫 urllib），需貼上自己的蝦皮 Cookie |
 | 2 | `crawler/shopee_crawler.py` | 用 Playwright 開啟真正的瀏覽器，搜尋 14 組「品牌 + 類別」，存下網頁本身載入的搜尋結果 JSON |
 | 2' | `crawler/browser_console/shopee_capture.js` | 同步驟 2，但改成貼在瀏覽器開發者工具的主控台（Console）執行，不需要安裝 Python 套件 |
 | 3 | `collect.py shopee` | 讀取 `raw/shopee/*.json`，排除廣告，寫入資料庫 |
@@ -28,6 +30,11 @@
 ```bash
 # 日本官網（只用 Python 標準庫）
 python collect.py official
+
+# 蝦皮：直接呼叫 API（建議）
+#   打開 shopee.tw 並登入 → F12 → Console → 貼上 browser_console/shopee_api.js
+#   或：python crawler/shopee_api.py（需貼上自己的 Cookie）
+#   把 JSON 放進 raw/shopee/，再執行 python collect.py shopee
 
 # 蝦皮：方法 A（Playwright）
 pip install -r crawler/requirements.txt
