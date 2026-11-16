@@ -31,7 +31,7 @@ import requests
 import streamlit as st
 
 from catalog import (BRANDS, CATEGORIES, SHIP_OVERSEAS, SHIP_TW, clean_official_rows,
-                     cn_query_terms, is_used_item, match_all_terms, parse_official_items, parse_shopee_payload, suggest_same_item_pattern,
+                     cn_query_terms, is_used_item, match_all_terms, parse_official_items, parse_shopee_payload, same_item_terms, suggest_same_item_pattern,
                      title_matches_brand, title_matches_pattern, to_float)
 
 # ============================================================================
@@ -513,6 +513,96 @@ def render_sidebar(bot: dict) -> dict:
                 brand_only=brand_only, exclude_used=exclude_used, exclude_outliers=exclude_outliers, cookie=cookie.strip())
 
 
+def pair_official_with_shopee(items: list[dict], pool: pd.DataFrame, cfg: dict) -> tuple[pd.DataFrame, list]:
+    """
+    日本官網每件商品各自到蝦皮找同款：
+      1. 貨號相同：蝦皮標題含官網 6 碼貨號（例 E482314-000 → 482314），視為同一件
+      2. 同系列　：找不到貨號時，用系列名稱比對（例 ヒートテック → heattech|發熱衣），
+                    多組系列詞時選最具體（對到筆數最少）的一組
+    回傳 (對照表, 每列對到的蝦皮商品 DataFrame 清單)
+    """
+    rows, matches = [], []
+    titles = pool["商品名稱"].astype(str)
+    for it in items:
+        jpy = effective_jpy(it, cfg["use_sale"])
+        twd = round(calc_overseas_cost(jpy, cfg["rate"], cfg["fee_pct"], cfg["refund_pct"]))
+        code = re.search(r"(\d{6})", it["商品編號"] or "")
+        m, how = pool.iloc[0:0], "—"
+        if code:
+            m = pool[titles.str.contains(code.group(1), regex=False)]
+            how = "貨號相同" if len(m) else how
+        if m.empty:  # 每組系列詞分開比對，選「有對到且筆數最少」＝最具體的那組（例：史努比 優先於 UT）
+            candidates = [pool[titles.apply(lambda t, p=p: title_matches_pattern(t, p))]
+                          for p in same_item_terms(it["官網商品名稱"])]
+            candidates = [c for c in candidates if len(c)]
+            if candidates:
+                m, how = min(candidates, key=len), "同系列"
+        m = m.sort_values("價格")
+        if m.empty:
+            rows.append({"日本官網商品": it["官網商品名稱"], "日本價": jpy, "日本換算台幣": twd,
+                         "蝦皮同款數": 0, "蝦皮最低價": None, "蝦皮中位數": None, "差價": None,
+                         "哪邊便宜": "蝦皮找不到同款", "比對方式": how})
+        else:
+            med = round(m["價格"].median())
+            diff = med - twd
+            rows.append({"日本官網商品": it["官網商品名稱"], "日本價": jpy, "日本換算台幣": twd,
+                         "蝦皮同款數": len(m), "蝦皮最低價": round(m["價格"].min()), "蝦皮中位數": med,
+                         "差價": diff,
+                         "哪邊便宜": "🇯🇵 日本便宜" if diff > 0 else ("🇹🇼 蝦皮便宜" if diff < 0 else "一樣"),
+                         "比對方式": how})
+        matches.append((it, twd, m))
+    table = pd.DataFrame(rows)
+    order = table.assign(_has=table["蝦皮同款數"] > 0, _how=table["比對方式"] == "貨號相同") \
+                 .sort_values(["_has", "_how", "差價"], ascending=[False, False, False]).index
+    return table.loc[order].reset_index(drop=True), [matches[i] for i in order]
+
+
+def render_pairing(items: list[dict], pool: pd.DataFrame, cfg: dict) -> None:
+    """② 逐項對照：一列一件日本商品，點選後下方並排顯示蝦皮同款。"""
+    st.subheader("🔍 逐項對照：日本官網每件商品 ↔ 蝦皮同款")
+    table, matches = pair_official_with_shopee(items, pool, cfg)
+    found = int((table["蝦皮同款數"] > 0).sum())
+    st.caption(f"{len(table)} 件官網商品中，{found} 件在蝦皮找到同款。"
+               "「差價」＝蝦皮中位數 − 日本換算台幣，正數代表日本比較便宜。👉 點選一列看兩邊的商品明細。")
+    event = st.dataframe(
+        table, width="stretch", hide_index=True, height=420,
+        on_select="rerun", selection_mode="single-row", key="pairing",
+        column_config={
+            "日本價": st.column_config.NumberColumn(format="¥%d"),
+            "日本換算台幣": st.column_config.NumberColumn(format="NT$%d"),
+            "蝦皮最低價": st.column_config.NumberColumn(format="NT$%d"),
+            "蝦皮中位數": st.column_config.NumberColumn(format="NT$%d"),
+            "差價": st.column_config.NumberColumn(format="%+d", help="蝦皮中位數 − 日本換算台幣"),
+            "比對方式": st.column_config.TextColumn(help="貨號相同＝同一件商品；同系列＝系列名稱相符"),
+        },
+    )
+    selected = list(getattr(getattr(event, "selection", None), "rows", []) or [])
+    if not selected:
+        return
+    it, twd, m = matches[selected[0]]
+    st.markdown(f"#### 對照明細：{it['官網商品名稱']}")
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**🇯🇵 日本官網**")
+        jpy = effective_jpy(it, cfg["use_sale"])
+        st.markdown(f"- 商品：[{it['官網商品名稱']}]({it['官網連結']})\n"
+                    f"- 日本含稅價：¥{jpy:,.0f}\n"
+                    f"- 換算台幣：**NT${twd:,.0f}**")
+        st.caption(f"¥{jpy:,.0f} ×（1 − 退稅 {cfg['refund_pct']}%）× 匯率 {cfg['rate']:.4f}"
+                   f" ×（1 + 手續費 {cfg['fee_pct']}%）")
+    with right:
+        st.markdown(f"**🇹🇼 蝦皮同款（{len(m)} 筆）**")
+        if m.empty:
+            st.write("蝦皮找不到同款商品。")
+        else:
+            view = m[["商品名稱", "價格", "出貨地", "商品連結"]].assign(比日本=m["價格"] - twd)
+            st.dataframe(view, width="stretch", hide_index=True, column_config={
+                "價格": st.column_config.NumberColumn("台幣", format="NT$%d"),
+                "比日本": st.column_config.NumberColumn(format="%+d", help="正數＝這筆比日本貴"),
+                "商品連結": st.column_config.LinkColumn("連結", display_text="開啟"),
+            })
+
+
 def render_table(df: pd.DataFrame, brand: str, tag: str, source: str) -> None:
     """右欄：蝦皮商品清單（可篩出貨地、下載 CSV）。"""
     st.subheader("🇹🇼 蝦皮商品")
@@ -567,6 +657,7 @@ def main() -> None:
         df = df[df["商品名稱"].apply(lambda t: title_matches_brand(t, BRANDS[cfg["brand"]]["aliases"]))]
         if n0 - len(df):
             notes.append(f"排除 {n0 - len(df)} 筆標題不含品牌名的商品")
+    pool = df[~df["商品名稱"].apply(is_used_item)] if cfg["exclude_used"] else df  # 逐項對照用
     if cfg["same_item"]:
         matched = df[df["商品名稱"].apply(lambda t: title_matches_pattern(t, cfg["same_item"]))]
         if len(matched) >= 3:
@@ -611,7 +702,12 @@ def main() -> None:
     else:
         st.info("兩邊價格相同", icon="⚖️")
 
-    # ---------- ② 左右兩欄：日本官網清單 | 蝦皮清單 ----------
+    # ---------- ② 逐項對照 ----------
+    if cfg["official"]["ok"]:
+        render_pairing(cfg["official"]["items"], pool, cfg)
+
+    # ---------- ③ 完整清單（左右兩欄） ----------
+    st.subheader("📋 完整清單")
     left, right = st.columns(2)
     with left:
         st.subheader("🇯🇵 日本官網商品")

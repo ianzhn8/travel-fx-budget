@@ -210,6 +210,11 @@ def match_all_terms(text: str, terms: list[dict], key: str) -> bool:
     return True
 
 
+def same_item_terms(jp_name: str) -> list[str]:
+    """官網商品名稱對到的每一組蝦皮系列詞（逐項對照時分開比對，挑最具體的那組）。"""
+    return [tw for jp, tw in JP_TW_TERMS if re.search(jp, jp_name or "", flags=re.IGNORECASE)]
+
+
 def suggest_same_item_pattern(jp_name: str, product_id: str) -> str:
     """
     依官網商品名稱與編號，產生蝦皮同款比對用的正規表示式（以 | 串接）。
