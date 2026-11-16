@@ -32,8 +32,8 @@ import requests
 import streamlit as st
 
 from catalog import (BRANDS, CATEGORIES, SHIP_OVERSEAS, SHIP_TW, clean_official_rows,
-                     is_used_item, parse_official_items, parse_shopee_payload, title_matches_brand,
-                     to_float)
+                     is_used_item, parse_official_items, parse_shopee_payload, suggest_same_item_pattern,
+                     title_matches_brand, title_matches_pattern, to_float)
 
 # ============================================================================
 # 0. 全域常數
@@ -444,6 +444,16 @@ def render_sidebar(bot: dict) -> dict:
     else:
         auto_jpy = DEFAULT_MANUAL_JPY
         sb.caption(f"✍️ 無官網資料（{official['reason']}），請手動輸入含稅價。")
+    # --- 同款比對：選了單一官網商品時，蝦皮只保留同款 ---
+    same_item = ""
+    if picked:
+        same_item = sb.text_input(
+            "🔎 蝦皮同款關鍵字（用 | 分隔）",
+            value=suggest_same_item_pattern(picked["官網商品名稱"], picked["商品編號"]),
+            key=f"same_{picked['商品編號']}",
+            help="已依官網貨號與系列名稱自動帶入，例如 482314|heattech|發熱衣。清空則改為整個類別比較。",
+        ).strip()
+
     jpy_price = sb.number_input("日本含稅價（JPY，可手動調整）", min_value=0.0, value=float(round(auto_jpy)),
                                 step=10.0, key=f"jpy_{brand}_{category}_{use_sale}_{round(auto_jpy)}")
     qty = sb.number_input("預計購買件數", min_value=1, value=1, step=1)
@@ -488,7 +498,7 @@ def render_sidebar(bot: dict) -> dict:
             st.cache_data.clear()
             st.rerun()
 
-    return dict(brand=brand, category=category, mode=mode, official=official, picked=picked,
+    return dict(brand=brand, category=category, mode=mode, official=official, picked=picked, same_item=same_item,
                 use_sale=use_sale, jpy_price=jpy_price, qty=int(qty), rate=rate, fee_pct=fee_pct,
                 refund_pct=refund_pct, uploaded=uploaded, shopee_kw=shopee_kw.strip(), limit=limit,
                 brand_only=brand_only, exclude_used=exclude_used, exclude_outliers=exclude_outliers, cookie=cookie.strip())
@@ -555,6 +565,14 @@ def main() -> None:
         df = df[df["商品名稱"].apply(lambda t: title_matches_brand(t, BRANDS[cfg["brand"]]["aliases"]))]
         if n0 - len(df):
             notes.append(f"排除 {n0 - len(df)} 筆標題不含品牌名的商品")
+    if cfg["same_item"]:
+        matched = df[df["商品名稱"].apply(lambda t: title_matches_pattern(t, cfg["same_item"]))]
+        if len(matched) >= 3:
+            st.info(f"同款比對：蝦皮有 {len(matched)} 筆標題符合「{cfg['same_item']}」，以下只用這些商品比較。", icon="🔎")
+            df = matched
+        else:
+            st.warning(f"同款比對：蝦皮只有 {len(matched)} 筆符合「{cfg['same_item']}」，樣本太少，"
+                       "改用整個類別比較。可在側邊欄調整關鍵字。", icon="🔎")
     if cfg["exclude_used"]:
         n0 = len(df)
         df = df[~df["商品名稱"].apply(is_used_item)]

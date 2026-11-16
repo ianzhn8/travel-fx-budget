@@ -80,6 +80,77 @@ def classify_shipping(location: str) -> str:
     return SHIP_TW if any(city in loc for city in TW_LOCATIONS) else SHIP_OVERSEAS
 
 
+# 日文系列 / 款式名稱 → 蝦皮台灣標題常見寫法（正規表示式，不分大小寫）
+JP_TW_TERMS: list[tuple[str, str]] = [
+    (r"ヒートテック", r"heattech|發熱衣"),
+    (r"エアリズム", r"airism|涼感"),
+    (r"ウルトラライトダウン", r"極輕羽絨|輕羽絨"),
+    (r"パフテック", r"pufftech|輕暖"),
+    (r"感動", r"感動"),
+    (r"ウルトラストレッチ", r"特級彈性|ultra ?stretch"),
+    (r"ノンアイロン", r"免燙|抗皺|non.?iron"),
+    (r"オックスフォード", r"牛津|oxford"),
+    (r"フランネル", r"法蘭絨|flannel"),
+    (r"コーデュロイ", r"燈芯絨|燈心絨|燈蕊絨|corduroy"),
+    (r"フリース", r"搖粒絨|刷毛|fleece"),
+    (r"ボア|ファーリー|フラッフィー", r"毛毛|泰迪|羊羔|絨毛|毛茸茸"),
+    (r"スウェット", r"大學t|衛衣|sweat"),
+    (r"メリノ", r"美麗諾|merino|羊毛"),
+    (r"カシミヤ", r"喀什米爾|cashmere"),
+    (r"デニム|ジーンズ", r"牛仔|丹寧|denim|jeans"),
+    (r"ジョーツ", r"jorts"),
+    (r"バレル", r"barrel|錐形|繭型"),
+    (r"カーゴ", r"工裝|cargo"),
+    (r"ジョガー", r"束口|jogger"),
+    (r"(?<!セミ)ワイド", r"寬褲|寬版|wide"),
+    (r"テーラード", r"西裝外套"),
+    (r"ブルゾン", r"布勞森|夾克"),
+    (r"MA-1", r"ma-?1|飛行"),
+    (r"パデッド", r"夾層|鋪棉|padded"),
+    (r"ギア", r"geared|機能"),
+    (r"(?<![A-Za-z])UT(?![A-Za-z])", r"(?<![a-z])ut(?![a-z])|聯名"),
+    (r"カウズ", r"kaws"),
+    (r"ピーナッツ", r"peanuts|史努比|snoopy"),
+    (r"ちいかわ|CHIIKAWA", r"吉伊卡哇|chiikawa"),
+    (r"ミッフィー", r"米菲|miffy"),
+    (r"ジェイソン・ポラン", r"jason ?polan"),
+    (r"バスキア", r"basquiat|巴斯奇亞"),
+    (r"ENGINEERED GARMENTS", r"engineered ?garments"),
+    (r"ラウンドミニショルダー", r"圓弧|迷你肩背|mini ?shoulder"),
+    (r"ショルダーバッグ", r"肩背包|斜背包|斜挎"),
+    (r"バックパック|ナップサック", r"後背包|背包"),
+    (r"ボストン", r"波士頓"),
+    (r"キャップ", r"帽"),
+    (r"ソックス", r"襪"),
+]
+
+
+def suggest_same_item_pattern(jp_name: str, product_id: str) -> str:
+    """
+    依官網商品名稱與編號，產生蝦皮同款比對用的正規表示式（以 | 串接）。
+    - 官網編號 E482314-000 → 蝦皮標題常見的 6 碼貨號 482314
+    - 日文系列名稱 → 台灣常見寫法（JP_TW_TERMS）
+    """
+    terms: list[str] = []
+    m = re.search(r"(\d{6})", product_id or "")
+    if m:
+        terms.append(m.group(1))
+    for jp, tw in JP_TW_TERMS:
+        if re.search(jp, jp_name or "", flags=re.IGNORECASE) and tw not in terms:
+            terms.append(tw)
+    return "|".join(terms)
+
+
+def title_matches_pattern(title: str, pattern: str) -> bool:
+    """蝦皮標題是否符合同款比對條件；條件格式錯誤時視為不篩選。"""
+    if not pattern:
+        return True
+    try:
+        return bool(re.search(pattern, str(title or ""), flags=re.IGNORECASE))
+    except re.error:
+        return True
+
+
 def is_used_item(title: str) -> bool:
     """標題看起來是二手或轉賣商品。"""
     return bool(re.search(USED_PATTERN, str(title or "")))
