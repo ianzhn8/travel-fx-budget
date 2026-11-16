@@ -408,22 +408,22 @@ def remove_outliers_iqr(df: pd.DataFrame, col: str = "價格") -> pd.DataFrame:
 
 def render_sidebar(bot: dict) -> dict:
     sb = st.sidebar
-    sb.header("👕 UNIQLO × GU 比價設定")
-    brand = sb.selectbox("品牌", list(BRANDS))
-    search_by = sb.radio("查詢方式", ["依類別", "中文關鍵字"], horizontal=True)
-    if search_by == "中文關鍵字":
-        query = sb.text_input("🔍 輸入中文商品名稱", value="發熱衣",
-                              help="例：發熱衣、牛仔褲、燈芯絨 外套、聯名 T恤、肩背包。多個詞用空白分開，需全部符合。").strip()
+    sb.header("⚙️ 比價設定")
+
+    # --- 主要查詢條件放在頁面最上方（窄螢幕側邊欄會自動收起，放這裡才看得到） ---
+    c1, c2 = st.columns([1, 1])
+    brand = c1.radio("品牌", list(BRANDS), horizontal=True)
+    search_by = c2.radio("查詢方式", ["依類別", "中文關鍵字搜尋"], horizontal=True)
+    if search_by == "中文關鍵字搜尋":
+        query = st.text_input("🔍 輸入中文商品名稱", value="發熱衣",
+                              help="例：發熱衣、牛仔褲、燈芯絨 外套、聯名 T恤、寬褲。多個詞用空白分開，需全部符合。").strip()
         category, terms = None, cn_query_terms(query)
-        if not query:
-            sb.warning("請輸入關鍵字。")
-        else:
-            no_jp = [t["token"] for t in terms if not t["jp"]]
-            if no_jp:
-                sb.caption(f"⚠️ 「{'、'.join(no_jp)}」沒有對應的日文用語，只用來篩選蝦皮。")
+        no_jp = [t["token"] for t in terms if not t["jp"]]
+        if no_jp:
+            st.caption(f"⚠️ 「{'、'.join(no_jp)}」沒有對應的日文用語，只用來篩選蝦皮。")
     else:
         query, terms = "", []
-        category = sb.radio("類別", list(CATEGORIES), horizontal=True)
+        category = st.radio("類別", list(CATEGORIES), horizontal=True)
     scope = category or f"「{query}」"
     mode = sb.radio("資料來源", [MODE_DB, MODE_LIVE, MODE_IMPORT],
                     help="錄影展示建議用「資料庫快照」：真實資料、畫面穩定、不會被擋。")
@@ -597,13 +597,9 @@ def main() -> None:
 
     # ---------- 統計與 KPI ----------
     p_med = df["價格"].median()
-    spread = p_med - overseas_twd
 
     st.subheader("📊 關鍵指標")
-    k1, k2 = st.columns(2)
-    k1.metric("台銀匯率（JPY）", f"{cfg['rate']:.4f}")
-    k2.metric("日本實際台幣成本", f"NT${overseas_twd:,.0f}", delta=f"{-spread:+,.0f} vs 蝦皮中位數",
-              delta_color="inverse", help=f"¥{cfg['jpy_price']:,.0f} ×（1−退稅）× 匯率 ×（1+手續費）")
+    st.metric("台銀匯率（JPY）", f"{cfg['rate']:.4f}")
 
     # ---------- 日本官網每件商品 vs 蝦皮中位數 ----------
     if cfg["official"]["ok"]:
