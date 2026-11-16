@@ -32,7 +32,7 @@ import requests
 import streamlit as st
 
 from catalog import (BRANDS, CATEGORIES, SHIP_OVERSEAS, SHIP_TW, clean_official_rows,
-                     is_used_item, parse_official_items, parse_shopee_payload, suggest_same_item_pattern,
+                     cn_query_terms, is_used_item, match_all_terms, parse_official_items, parse_shopee_payload, suggest_same_item_pattern,
                      title_matches_brand, title_matches_pattern, to_float)
 
 # ============================================================================
@@ -183,16 +183,20 @@ def load_snapshot(path_str: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def snapshot_rows(path: Path, brand: str, category: str) -> tuple[pd.DataFrame, pd.DataFrame, str]:
-    """回傳 (該品牌類別全部歷史, 最新一天資料, 最新收集時間)。"""
+def snapshot_rows(path: Path, brand: str, category: str | None) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+    """
+    回傳 (全部歷史, 最新資料, 最新收集時間)。
+    category 為 None 時取該品牌所有類別（每個類別各取最新一天，供中文關鍵字搜尋使用）。
+    """
     df = load_snapshot(str(path))
     if df.empty:
         return df, df, ""
-    sub = df[(df["brand"] == brand) & (df["category"] == category)]
+    sub = df[df["brand"] == brand]
+    if category:
+        sub = sub[sub["category"] == category]
     if sub.empty:
         return sub, sub, ""
-    latest_date = sub["date"].max()
-    latest = sub[sub["date"] == latest_date]
+    latest = sub[sub["date"] == sub.groupby("category")["date"].transform("max")]
     return sub, latest, str(latest["collected_at"].max())
 
 
@@ -201,12 +205,12 @@ def snapshot_rows(path: Path, brand: str, category: str) -> tuple[pd.DataFrame, 
 # ============================================================================
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_official_live(brand: str, category: str) -> dict:
-    """即時查詢官網（該類別的所有日文關鍵字合併去重）。永不拋出例外。"""
+def fetch_official_live(brand: str, keywords: tuple, category: str | None = None) -> dict:
+    """即時查詢官網（多個日文關鍵字合併去重；有類別時套用類別排除規則）。永不拋出例外。"""
     out = {"ok": False, "items": [], "reason": ""}
     site = BRANDS[brand]
     rows: list[dict] = []
-    for kw in CATEGORIES[category]["jp"]:
+    for kw in keywords:
         denied = _guard_acquire("official")
         if denied:
             out["reason"] = f"官網{denied}"
@@ -232,7 +236,10 @@ def fetch_official_live(brand: str, category: str) -> dict:
             out["reason"] = f"官網連線失敗：{type(exc).__name__}"
         except Exception as exc:  # noqa: BLE001
             out["reason"] = f"官網資料解析失敗：{type(exc).__name__}"
-    rows = clean_official_rows(rows, category)
+    if category:
+        rows = clean_official_rows(rows, category)
+    else:
+        rows = list({r["商品編號"] or r["官網商品名稱"]: r for r in rows}.values())
     if rows:
         out.update(ok=True, items=rows, reason="")
     elif not out["reason"]:
@@ -240,7 +247,13 @@ def fetch_official_live(brand: str, category: str) -> dict:
     return out
 
 
-def get_official(brand: str, category: str, mode: str) -> dict:
+def _live_keyword(jp_pattern: str) -> str:
+    """從日文正規表示式取出第一個可直接拿去官網搜尋的詞（例：ジーンズ|デニム → ジーンズ）。"""
+    first = re.sub(r"\(\?<?[!=][^)]*\)", "", jp_pattern.split("|")[0])
+    return first if re.fullmatch(r"[\w\-ー・＝]+", first) else ""
+
+
+def get_official(brand: str, category: str | None, mode: str, terms: list | None = None) -> dict:
     """
     依模式取得官網價格：
       資料庫模式：快照 → (沒有) 即時
@@ -256,9 +269,23 @@ def get_official(brand: str, category: str, mode: str) -> dict:
             "官網連結": r["官網連結"],
         } for _, r in latest.iterrows() if to_float(r["定價(JPY)"])]
 
+    keywords = tuple(CATEGORIES[category]["jp"]) if category else ()
+    if terms:  # 中文關鍵字搜尋：跨類別篩選，並轉成日文詞即時查詢
+        if not any(t["jp"] for t in terms):
+            return {"ok": False, "items": [], "source": "手動輸入",
+                    "reason": "查詢詞沒有對應的日文商品用語，無法比對官網"}
+        snap_items = [i for i in snap_items if match_all_terms(i["官網商品名稱"], terms, "jp")]
+        snap_items = list({i["商品編號"]: i for i in snap_items}.values())
+        first_jp = next(t["jp"] for t in terms if t["jp"])[0]  # 最具體的一組（如「牛仔褲」取ジーンズ）
+        keywords = tuple(k for k in [_live_keyword(first_jp)] if k)
+
     if mode == MODE_DB and snap_items:
         return {"ok": True, "items": snap_items, "source": f"資料庫（{collected}）", "reason": ""}
-    live = fetch_official_live(brand, category)
+    live = (fetch_official_live(brand, keywords, category) if keywords
+            else {"ok": False, "items": [], "reason": "無法轉成官網搜尋字"})
+    if live["ok"] and terms:
+        items = [i for i in live["items"] if match_all_terms(i["官網商品名稱"], terms, "jp")]
+        live = {"ok": bool(items), "items": items, "reason": "" if items else "官網查無符合商品"}
     if live["ok"]:
         return {"ok": True, "items": live["items"], "source": "官網即時", "reason": ""}
     if snap_items:
@@ -324,11 +351,10 @@ def fetch_shopee_live(keyword: str, limit: int = 50, cookie: str = "") -> dict:
     return out
 
 
-def generate_mock_items(brand: str, category: str, reference_twd: float, n: int = 40) -> list[dict]:
+def generate_mock_items(brand: str, label: str, tw_item: str, reference_twd: float, n: int = 40) -> list[dict]:
     """蝦皮離線模擬資料：品牌＋類別當亂數種子（每次相同，錄影穩定），價格為日本成本的 1.05~1.6 倍。"""
-    rng = np.random.default_rng(int(hashlib.md5(f"{brand}|{category}".encode()).hexdigest()[:8], 16))
+    rng = np.random.default_rng(int(hashlib.md5(f"{brand}|{label}".encode()).hexdigest()[:8], 16))
     center = (reference_twd if reference_twd > 0 else 600.0) * rng.uniform(1.05, 1.6)
-    tw_item = CATEGORIES[category]["tw"]
     shops = ["日本代購小舖", "東京直送", "日系選物", "大阪連線", "正品代購", "日貨專賣"]
     tags = ["現貨", "日本連線", "正品", "預購", "男女款", "多色可選"]
     cities = ["台北市", "新北市", "桃園市", "台中市", "台南市", "高雄市"]
@@ -350,12 +376,20 @@ def generate_mock_items(brand: str, category: str, reference_twd: float, n: int 
 def get_shopee(cfg: dict) -> tuple[pd.DataFrame | None, str, str]:
     """依模式取得蝦皮資料，回傳 (DataFrame 或 None, 來源說明, 失敗原因)。None 代表改用模擬資料。"""
     _, latest, collected = snapshot_rows(SHOPEE_CSV, cfg["brand"], cfg["category"])
+    if cfg["terms"] and not latest.empty:  # 中文關鍵字：標題需符合每個詞（含同義詞）
+        latest = latest[latest["商品名稱"].apply(lambda t: match_all_terms(t, cfg["terms"], "tw"))]
+        latest = latest.drop_duplicates(subset="商品連結")
     snap = latest.drop(columns=["collected_at", "brand", "category", "date"], errors="ignore")
 
     if cfg["mode"] == MODE_DB:
         if not snap.empty:
             return snap, f"資料庫（{collected}）", ""
-        return None, "", "資料庫中還沒有此品牌類別的蝦皮資料（請用 collect.py 匯入）"
+        # 資料庫沒有這項商品：改用即時查詢（受守門員保護），仍失敗才用模擬資料
+        with st.spinner(f"資料庫沒有{cfg['scope']}，改搜尋蝦皮即時資料…"):
+            live = fetch_shopee_live(cfg["shopee_kw"], cfg["limit"], cfg["cookie"])
+        if live["ok"]:
+            return pd.DataFrame(live["items"]), "蝦皮即時（資料庫沒有此商品）", ""
+        return None, "", f"資料庫中沒有符合{cfg['scope']}的蝦皮資料，即時查詢也失敗（{live['reason']}）"
     if cfg["mode"] == MODE_LIVE:
         with st.spinner(f"搜尋蝦皮「{cfg['shopee_kw']}」…"):
             live = fetch_shopee_live(cfg["shopee_kw"], cfg["limit"], cfg["cookie"])
@@ -416,7 +450,21 @@ def render_sidebar(bot: dict) -> dict:
     sb = st.sidebar
     sb.header("👕 UNIQLO × GU 比價設定")
     brand = sb.selectbox("品牌", list(BRANDS))
-    category = sb.radio("類別", list(CATEGORIES), horizontal=True)
+    search_by = sb.radio("查詢方式", ["依類別", "中文關鍵字"], horizontal=True)
+    if search_by == "中文關鍵字":
+        query = sb.text_input("🔍 輸入中文商品名稱", value="發熱衣",
+                              help="例：發熱衣、牛仔褲、燈芯絨 外套、聯名 T恤、肩背包。多個詞用空白分開，需全部符合。").strip()
+        category, terms = None, cn_query_terms(query)
+        if not query:
+            sb.warning("請輸入關鍵字。")
+        else:
+            no_jp = [t["token"] for t in terms if not t["jp"]]
+            if no_jp:
+                sb.caption(f"⚠️ 「{'、'.join(no_jp)}」沒有對應的日文用語，只用來篩選蝦皮。")
+    else:
+        query, terms = "", []
+        category = sb.radio("類別", list(CATEGORIES), horizontal=True)
+    scope = category or f"「{query}」"
     mode = sb.radio("資料來源", [MODE_DB, MODE_LIVE, MODE_IMPORT, MODE_OFFLINE],
                     help="錄影展示建議用「資料庫快照」：真實資料、畫面穩定、不會被擋。")
 
@@ -424,17 +472,19 @@ def render_sidebar(bot: dict) -> dict:
     sb.divider()
     sb.subheader("🇯🇵 日本價格")
     with st.spinner("讀取日本官網價格…"):
-        official = get_official(brand, category, mode)
+        official = (get_official(brand, None, mode, terms) if query
+                    else get_official(brand, category, mode) if category
+                    else {"ok": False, "items": [], "source": "手動輸入", "reason": "尚未輸入關鍵字"})
     use_sale = sb.checkbox("使用官網特價（若有）", value=True)
     picked = None
     if official["ok"]:
         items = official["items"]
         median_jpy = float(np.median([effective_jpy(i, use_sale) for i in items]))
-        labels = [f"📊 類別中位數（{len(items)} 件商品）｜¥{median_jpy:,.0f}"] + [
+        labels = [f"📊 {scope}中位數（{len(items)} 件商品）｜¥{median_jpy:,.0f}"] + [
             f"{i['官網商品名稱']}｜¥{effective_jpy(i, use_sale):,.0f}{'（特價）' if use_sale and i['特價(JPY)'] else ''}"
             for i in items]
         choice = sb.selectbox("比較對象", range(len(labels)), format_func=lambda k: labels[k],
-                              key=f"pick_{brand}_{category}")
+                              key=f"pick_{brand}_{scope}")
         if choice == 0:
             auto_jpy = median_jpy
         else:
@@ -455,7 +505,7 @@ def render_sidebar(bot: dict) -> dict:
         ).strip()
 
     jpy_price = sb.number_input("日本含稅價（JPY，可手動調整）", min_value=0.0, value=float(round(auto_jpy)),
-                                step=10.0, key=f"jpy_{brand}_{category}_{use_sale}_{round(auto_jpy)}")
+                                step=10.0, key=f"jpy_{brand}_{scope}_{use_sale}_{round(auto_jpy)}")
     qty = sb.number_input("預計購買件數", min_value=1, value=1, step=1)
 
     # --- 匯率與費用 ---
@@ -486,8 +536,8 @@ def render_sidebar(bot: dict) -> dict:
             sb.caption(f"🛡️ 本小時已連線蝦皮 {gs['used']}/{gs['cap']} 次")
 
     with sb.expander("⚙️ 進階設定"):
-        shopee_kw = st.text_input("蝦皮即時搜尋字串", value=f"{brand} {CATEGORIES[category]['tw']}",
-                                  key=f"kw_{brand}_{category}")
+        shopee_kw = st.text_input("蝦皮即時搜尋字串", value=f"{brand} {query or CATEGORIES[category]['tw']}",
+                                  key=f"kw_{brand}_{scope}")
         limit = st.slider("蝦皮即時搜尋筆數", 20, 60, 50, step=10)
         brand_only = st.checkbox("只保留標題含品牌名的商品", value=True)
         exclude_used = st.checkbox("排除二手 / 轉賣商品", value=True,
@@ -498,7 +548,7 @@ def render_sidebar(bot: dict) -> dict:
             st.cache_data.clear()
             st.rerun()
 
-    return dict(brand=brand, category=category, mode=mode, official=official, picked=picked, same_item=same_item,
+    return dict(brand=brand, category=category, query=query, terms=terms, scope=scope, mode=mode, official=official, picked=picked, same_item=same_item,
                 use_sale=use_sale, jpy_price=jpy_price, qty=int(qty), rate=rate, fee_pct=fee_pct,
                 refund_pct=refund_pct, uploaded=uploaded, shopee_kw=shopee_kw.strip(), limit=limit,
                 brand_only=brand_only, exclude_used=exclude_used, exclude_outliers=exclude_outliers, cookie=cookie.strip())
@@ -531,11 +581,14 @@ def main() -> None:
     with st.spinner("讀取台灣銀行即時匯率…"):
         bot = fetch_bot_jpy_rate()
     cfg = render_sidebar(bot)
+    if not cfg["category"] and not cfg["query"]:
+        st.info("請在左側輸入中文商品名稱，例如：發熱衣、牛仔褲、燈芯絨 外套。")
+        st.stop()
     if cfg["jpy_price"] <= 0:
         st.warning("請輸入大於 0 的日本含稅價。")
         st.stop()
     overseas_twd = calc_overseas_cost(cfg["jpy_price"], cfg["rate"], cfg["fee_pct"], cfg["refund_pct"])
-    compare_name = cfg["picked"]["官網商品名稱"] if cfg["picked"] else f"{cfg['category']}類中位數"
+    compare_name = cfg["picked"]["官網商品名稱"] if cfg["picked"] else f"{cfg['scope']}中位數"
 
     # ---------- 資料狀態 ----------
     if cfg["official"]["ok"]:
@@ -548,7 +601,7 @@ def main() -> None:
     if df is not None:
         st.success(f"蝦皮資料：{len(df)} 筆（來源：{shopee_source}）", icon="🛒")
     else:
-        df = pd.DataFrame(generate_mock_items(cfg["brand"], cfg["category"], overseas_twd))
+        df = pd.DataFrame(generate_mock_items(cfg["brand"], cfg["scope"], cfg["query"] or CATEGORIES[cfg["category"]]["tw"], overseas_twd))
         shopee_source = "離線模擬"
         st.info(f"已切換至離線備援資料模式（原因：{shopee_reason}）。以下為模擬資料，分析流程與真實資料相同。",
                 icon="🛟")
@@ -612,7 +665,7 @@ def main() -> None:
     with st.expander("🗂️ 4W1H 分析摘要"):
         n_tw = int((df["出貨地"] == SHIP_TW).sum())
         st.markdown(
-            f"- **What｜買什麼**：{cfg['brand']} {cfg['category']}｜{compare_name}（{cfg['qty']} 件）\n"
+            f"- **What｜買什麼**：{cfg['brand']} {cfg['scope']}｜{compare_name}（{cfg['qty']} 件）\n"
             f"- **Where｜在哪買**：日本 NT${overseas_twd:,.0f}（¥{cfg['jpy_price']:,.0f}） vs 蝦皮中位數 NT${p_med:,.0f}\n"
             f"- **When｜資料時間**：匯率 {bot.get('updated_at') or '參考值'}；日本 {cfg['official']['source']}；"
             f"蝦皮 {shopee_source}\n"
@@ -622,7 +675,7 @@ def main() -> None:
 
     # ---------- 日本官網每件商品 vs 蝦皮中位數 ----------
     if cfg["official"]["ok"]:
-        st.subheader(f"🇯🇵 {cfg['brand']} {cfg['category']}類：日本官網每件商品 vs 蝦皮中位數")
+        st.subheader(f"🇯🇵 {cfg['brand']} {cfg['scope']}：日本官網每件商品 vs 蝦皮中位數")
         rows = []
         for it in cfg["official"]["items"]:
             jpy = effective_jpy(it, cfg["use_sale"])
@@ -641,7 +694,7 @@ def main() -> None:
         st.caption(f"日本成本已含匯率、刷卡手續費 {cfg['fee_pct']}%、退稅 {cfg['refund_pct']}%；"
                    "「日本買省」為負數代表日本比較貴。")
 
-    render_table(df, overseas_twd, f"{cfg['brand']}_{cfg['category']}")
+    render_table(df, overseas_twd, f"{cfg['brand']}_{cfg['category'] or cfg['query']}")
 
     st.divider()
     st.caption("資料來源：臺灣銀行牌告匯率、UNIQLO／GU 日本官網、蝦皮購物。價格僅供參考，實際以結帳金額為準。")

@@ -125,6 +125,91 @@ JP_TW_TERMS: list[tuple[str, str]] = [
 ]
 
 
+# 中文查詢詞 → (日本官網商品名稱比對用的日文, 蝦皮標題同義詞)
+# 第一欄用來判斷使用者輸入的詞屬於哪一組（正規表示式，不分大小寫）
+CN_JP_TERMS: list[tuple[str, str, str]] = [
+    (r"發熱|heattech|保暖衣|衛生衣", r"ヒートテック", r"發熱衣|heattech"),
+    (r"涼感|airism|透氣", r"エアリズム", r"airism|涼感"),
+    (r"羽絨|down", r"ダウン", r"羽絨|down"),
+    (r"輕暖|pufftech", r"パフテック", r"pufftech|輕暖"),
+    (r"牛仔|丹寧|denim|jeans", r"ジーンズ|デニム|ジョーツ", r"牛仔|丹寧|denim|jeans"),
+    (r"襯衫|shirt", r"シャツ|ブラウス", r"襯衫|shirt"),
+    (r"外套|夾克|jacket", r"ジャケット|ブルゾン|コート|アウター|パーカ", r"外套|夾克|jacket"),
+    (r"大衣|coat", r"コート", r"大衣|coat"),
+    (r"大學t|衛衣|帽t|sweat", r"スウェット|パーカ", r"大學t|衛衣|帽t|sweat"),
+    (r"連帽|帽踢|parka|hoodie", r"パーカ|フーデッド", r"連帽|帽踢|parka|hoodie"),
+    (r"毛衣|針織|knit", r"ニット|セーター|カーディガン", r"毛衣|針織|knit"),
+    (r"開襟衫|罩衫|cardigan", r"カーディガン", r"開襟|罩衫|cardigan"),
+    (r"燈芯絨|燈心絨|燈蕊絨|corduroy", r"コーデュロイ", r"燈芯絨|燈心絨|燈蕊絨|corduroy"),
+    (r"刷毛|搖粒絨|fleece", r"フリース", r"刷毛|搖粒絨|fleece"),
+    (r"毛毛|泰迪|羊羔|絨毛|毛茸茸", r"ボア|ファーリー|フラッフィー", r"毛毛|泰迪|羊羔|絨毛|毛茸茸"),
+    (r"寬褲|寬版|wide", r"(?<!セミ)ワイド", r"寬褲|寬版|wide"),
+    (r"束口|jogger", r"ジョガー", r"束口|jogger"),
+    (r"錐形|繭型|barrel", r"バレル|テーパード", r"錐形|繭型|barrel"),
+    (r"工裝|cargo", r"カーゴ|ワーク|ユーティリティ", r"工裝|cargo"),
+    (r"長褲|褲子|pants", r"パンツ|ジーンズ", r"長褲|褲|pants"),
+    (r"短褲|shorts", r"ショーツ|ショートパンツ|ハーフパンツ|ジョーツ", r"短褲|shorts"),
+    (r"t恤|短t|素t|tee", r"T(?![A-Za-z])|Tシャツ", r"t恤|短t|素t|tee|t-shirt"),
+    (r"褲", r"パンツ|ジーンズ|ショーツ|ジョーツ", r"褲|pants|jeans"),
+    (r"西裝", r"テーラード|スーツ", r"西裝"),
+    (r"牛津|oxford", r"オックスフォード", r"牛津|oxford"),
+    (r"免燙|抗皺", r"ノンアイロン", r"免燙|抗皺"),
+    (r"法蘭絨|flannel", r"フランネル", r"法蘭絨|flannel"),
+    (r"喀什米爾|cashmere", r"カシミヤ", r"喀什米爾|cashmere"),
+    (r"羊毛|美麗諾|merino|wool", r"メリノ|ウール", r"羊毛|美麗諾|merino|wool"),
+    (r"彈性|stretch", r"ストレッチ", r"彈性|stretch"),
+    (r"聯名|ut", r"(?<![A-Za-z])UT(?![A-Za-z])", r"聯名|(?<![a-z])ut(?![a-z])"),
+    (r"kaws", r"カウズ", r"kaws"),
+    (r"史努比|snoopy|peanuts", r"ピーナッツ", r"史努比|snoopy|peanuts"),
+    (r"吉伊卡哇|chiikawa", r"ちいかわ|CHIIKAWA", r"吉伊卡哇|chiikawa"),
+    (r"米菲|miffy", r"ミッフィー", r"米菲|miffy"),
+    (r"包|bag", r"バッグ|ポーチ|バックパック|ナップサック", r"包|bag"),
+    (r"(?<![肩斜])背包|後背包|backpack", r"バックパック|ナップサック", r"背包|backpack"),
+    (r"肩背|斜背|斜挎", r"ショルダー", r"肩背|斜背|斜挎"),
+    (r"托特|tote", r"トート", r"托特|tote"),
+    (r"帽|cap", r"キャップ|ハット|帽", r"帽|cap"),
+    (r"襪", r"ソックス", r"襪"),
+    (r"皮帶|腰帶|belt", r"ベルト", r"皮帶|腰帶|belt"),
+    (r"長袖", r"長袖|ロングスリーブ", r"長袖"),
+    (r"短袖|半袖", r"半袖|5分袖", r"短袖|半袖"),
+]
+
+
+def cn_query_terms(query: str) -> list[dict]:
+    """
+    把中文查詢拆成詞（以空白分隔），每個詞找出對應的日文與蝦皮同義詞。
+    回傳 [{"token", "jp": [日文正規表示式...], "tw": [蝦皮正規表示式...]}]
+    同一個詞對到多組時「全部都要符合」，例如「肩背包」= 肩背 且 包、「牛仔褲」= 牛仔 且 褲。
+    - 查不到對照的英數詞（如 MA-1）：官網與蝦皮都直接用原字比對
+    - 查不到對照的中文詞：只用於蝦皮，官網略過（會在畫面上提示）
+    """
+    terms = []
+    for token in str(query or "").split():
+        matched = []
+        for cn, jp, tw in CN_JP_TERMS:
+            m = re.search(cn, token, flags=re.IGNORECASE)
+            if m:
+                matched.append((len(m.group(0)), jp, tw))
+        matched.sort(key=lambda x: -x[0])  # 對到越長的字越具體，排在前面（即時查詢用第一組）
+        jp_parts = [jp for _, jp, _ in matched]
+        tw_parts = [f"{re.escape(token)}|{tw}" for _, _, tw in matched]
+        if not jp_parts and token.isascii():
+            jp_parts.append(re.escape(token))
+        if not tw_parts:
+            tw_parts.append(re.escape(token))
+        terms.append({"token": token, "jp": jp_parts, "tw": tw_parts})
+    return terms
+
+
+def match_all_terms(text: str, terms: list[dict], key: str) -> bool:
+    """文字是否符合每一個詞的每一組表示式（AND）；該詞沒有對應表示式時略過。"""
+    for t in terms:
+        for pattern in t[key]:
+            if not re.search(pattern, str(text or ""), flags=re.IGNORECASE):
+                return False
+    return True
+
+
 def suggest_same_item_pattern(jp_name: str, product_id: str) -> str:
     """
     依官網商品名稱與編號，產生蝦皮同款比對用的正規表示式（以 | 串接）。
