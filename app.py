@@ -603,21 +603,6 @@ def render_pairing(items: list[dict], pool: pd.DataFrame, cfg: dict) -> None:
             })
 
 
-def render_table(df: pd.DataFrame, brand: str, tag: str, source: str) -> None:
-    """右欄：蝦皮商品清單（可篩出貨地、下載 CSV）。"""
-    st.subheader("🇹🇼 蝦皮商品")
-    ship_filter = st.multiselect("出貨地", [SHIP_TW, SHIP_OVERSEAS], default=[SHIP_TW, SHIP_OVERSEAS])
-    view = df[df["出貨地"].isin(ship_filter)].sort_values("價格").reset_index(drop=True)
-    cols = ["商品名稱", "價格", "出貨地", "累積銷量", "商品連結"]
-    st.dataframe(view[cols], width="stretch", hide_index=True, height=360, column_config={
-        "價格": st.column_config.NumberColumn("台幣", format="NT$%d"),
-        "商品連結": st.column_config.LinkColumn("連結", display_text="開啟"),
-    })
-    st.caption(f"共 {len(view)} 筆｜來源：{source}")
-    st.download_button("⬇️ 下載蝦皮清單 CSV", data=view[cols].to_csv(index=False).encode("utf-8-sig"),
-                       mime="text/csv", file_name=f"shopee_{brand}_{tag}_{datetime.now(TW_TZ):%Y%m%d_%H%M}.csv")
-
-
 def main() -> None:
     st.set_page_config(page_title="UNIQLO × GU 日本 vs 蝦皮 比價", page_icon="👕", layout="wide")
     st.title("👕 國際旅遊外幣購物預算精算機｜UNIQLO × GU")
@@ -706,29 +691,6 @@ def main() -> None:
     if cfg["official"]["ok"]:
         render_pairing(cfg["official"]["items"], pool, cfg)
 
-    # ---------- ③ 完整清單（左右兩欄） ----------
-    st.subheader("📋 完整清單")
-    left, right = st.columns(2)
-    with left:
-        st.subheader("🇯🇵 日本官網商品")
-        if cfg["official"]["ok"]:
-            jp_rows = []
-            for it in cfg["official"]["items"]:
-                jpy = effective_jpy(it, cfg["use_sale"])
-                jp_rows.append({"商品名稱": it["官網商品名稱"], "日幣": jpy,
-                                "換算台幣": round(calc_overseas_cost(jpy, cfg["rate"], cfg["fee_pct"], cfg["refund_pct"])),
-                                "連結": it["官網連結"]})
-            st.dataframe(pd.DataFrame(jp_rows).sort_values("換算台幣"), width="stretch", hide_index=True,
-                         height=420, column_config={
-                             "日幣": st.column_config.NumberColumn(format="¥%d"),
-                             "換算台幣": st.column_config.NumberColumn(format="NT$%d"),
-                             "連結": st.column_config.LinkColumn(display_text="開啟"),
-                         })
-            st.caption(f"共 {len(jp_rows)} 件｜來源：{cfg['official']['source']}")
-        else:
-            st.write(f"沒有官網資料，使用手動輸入的 ¥{cfg['jpy_price']:,.0f}。")
-    with right:
-        render_table(df, cfg["brand"], cfg["category"] or cfg["query"], shopee_source)
 
     st.divider()
     st.caption("資料來源：臺灣銀行牌告匯率、UNIQLO／GU 日本官網、蝦皮購物。價格僅供參考，實際以結帳金額為準。")
